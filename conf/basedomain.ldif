@@ -1,0 +1,19 @@
+dn: DOMAIN_DC
+objectClass: top
+objectClass: dcObject
+objectclass: organization
+o: Server World
+dc: Srv
+
+dn: cn=Manager,DOMAIN_DC
+objectClass: organizationalRole
+cn: Manager
+description: Directory Manager
+
+dn: ou=People,DOMAIN_DC
+objectClass: organizationalUnit
+ou: People
+
+dn: ou=Group,DOMAIN_DC
+objectClass: organizationalUnit
+ou: Group
