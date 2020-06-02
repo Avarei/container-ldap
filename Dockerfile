@@ -4,8 +4,6 @@ RUN yum update -y \
   && yum install -y openldap-servers openldap-clients \
   && yum clean all
 
-RUN chown ldap. /var/lib/ldap/DB_CONFIG 
-
 #LDAP Database Files
 VOLUME /var/lib/ldap
 
