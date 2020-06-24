@@ -1,8 +1,10 @@
 FROM centos:7
 
 RUN yum update -y \
-  && yum install -y openldap-servers openldap-clients \
+  && yum install -y openldap-servers \
   && yum clean all
+
+COPY conf/DB_CONFIG /var/lib/ldap/DB_CONFIG
 
 #LDAP Database Files
 VOLUME /var/lib/ldap
@@ -10,8 +12,11 @@ VOLUME /var/lib/ldap
 #LDAP Config Files
 VOLUME /etc/openldap/slap.d
 
+#Standard Port
 EXPOSE 389/tcp
-EXPOSE 389/udp
+#EXPOSE 389/udp
+#LDAPS
+EXPOSE 636/tcp
 
 CMD SLAPD_URLS="ldap:/// ldapi:///" \
   && SLAPD_OPTIONS= \
