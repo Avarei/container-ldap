@@ -3,7 +3,7 @@ FROM centos:7
 COPY conf/DB_CONFIG /var/lib/ldap/DB_CONFIG
 
 RUN yum update -y \
-  && yum install -y openldap-servers \
+  && yum install -y openldap-clients openldap-servers \
   && yum clean all \
   && chown ldap. /var/lib/ldap/DB_CONFIG
 
