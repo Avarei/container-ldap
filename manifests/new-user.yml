@@ -1,0 +1,113 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: ldap
+  name: new-user
+data:
+  setup.sh: |
+    #!/bin/sh
+    set -xe
+    
+    PASSWORD_SHA=$(slappasswd -s "$PASSWORD")
+    
+    NEW_USER=$(sed -e "s~{{PASSWORD_SHA}}~$PASSWORD_SHA~g; s~{{UID}}~$UID~g; s~{{LNAME}}~$LNAME~g; s~{{FNAME}}~$FNAME~g; s~{{DESC}}~$DESC~g" /setup/new-user.ldif)
+    
+    #cp /certificates/tim.crt /usr/local/share/ca-certificates/tim.crt
+    #update-ca-certificates
+    echo -n "$NEW_USER" | ldapadd -x -D "cn=Manager,dc=tim" -w "$ADMIN_PASSWORD" -H "ldap://ldap"
+  new-user.ldif: |
+    dn: uid={{UID}},ou=People,dc=tim
+    objectClass: top
+    objectClass: person
+    objectClass: organizationalPerson
+    objectClass: inetOrgPerson
+    uid: {{UID}}
+    cn: {{FNAME}} {{LNAME}}
+    sn: {{LNAME}}
+    givenName: {{FNAME}}
+    userPassword: {{PASSWORD_SHA}}
+    description: {{DESC}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  namespace: ldap
+  name: ldap-job
+spec:
+  podSelector:
+    matchLabels:
+      app: ldap-job
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          project: ldap
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  namespace: ldap
+  name: ldap-setup
+spec:
+  template:
+    metadata:
+      labels:
+        app: ldap-job
+    spec:
+      containers:
+      - name: ldap-new-user
+        image: registry.tim/ldap:latest
+        command: ["/setup/setup.sh"]
+        env:
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ldap-secret
+              key: admin_password
+        # ldap-new-user secret
+        - name: UID
+          valueFrom:
+            secretKeyRef:
+              name: new-user
+              key: uid
+        - name: LNAME
+          valueFrom:
+            secretKeyRef:
+              name: new-user
+              key: lname
+        - name: FNAME
+          valueFrom:
+            secretKeyRef:
+              name: new-user
+              key: fname
+        - name: DESC
+          valueFrom:
+            secretKeyRef:
+              name: new-user
+              key: desc
+        - name: PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: new-user
+              key: password
+        volumeMounts:
+        - name: setup
+          mountPath: /setup
+          readOnly: true
+        #- name: certificates
+        #  mountPath: /certificates
+        #  readOnly: true
+      restartPolicy: Never
+      volumes:
+      - name: setup
+        configMap:
+          name: new-user
+          defaultMode: 0555
+      #- name: certificates
+      #  secret:
+      #    secretName: ldap-secret
+      #    defaultMode: 0444
+  backoffLimit: 2

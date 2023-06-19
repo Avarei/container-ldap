@@ -1,0 +1,215 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  namespace: ldap
+  name: ldap
+spec:
+  podSelector:
+    matchLabels:
+      app: ldap
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          project: ldap
+    - namespaceSelector:
+        matchLabels:
+          project: cicd
+    - namespaceSelector:
+        matchLabels:
+          project: authentication
+      podSelector:
+        matchLabels:
+          app: keycloak
+    ports:
+    - protocol: TCP
+      port: 389
+    - protocol: TCP
+      port: 636
+  egress: []
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: ldap
+  name: ldap
+  labels:
+    app: ldap
+spec:
+  ports:
+  - name: ldap
+    protocol: TCP
+    port: 389
+  - name: ldaps
+    protocol: TCP
+    port: 636
+  selector:
+    app: ldap
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: ldap
+  name: ldap
+  labels:
+    app: ldap
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ldap
+  template:
+    metadata:
+      labels:
+        app: ldap
+    spec:
+      containers:
+      - name: ldap
+        image: registry.tim/ldap:latest
+        ports:
+        - name: ldap
+          containerPort: 389
+        - name: ldaps
+          containerPort: 636
+        volumeMounts:
+        - name: certificates
+          mountPath: /certificates
+          readOnly: true
+        - name: db
+          mountPath: /var/lib/openldap/openldap-data
+        - name: config
+          mountPath: /etc/openldap
+      initContainers:
+        - name: setup
+          image: registry.tim/ldap:latest
+          command: ["/setup/setup.sh"]
+          env:
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ldap-secret
+                  key: admin_password
+          volumeMounts:
+            - name: setup
+              mountPath: /setup
+              readOnly: true
+            - name: certificates
+              mountPath: /certificates
+              readOnly: true
+            - name: db
+              mountPath: /var/lib/openldap/openldap-data
+            - name: config
+              mountPath: /etc/openldap
+      volumes:
+      - name: setup
+        configMap:
+          name: setup
+          defaultMode: 0555
+      - name: certificates
+        secret:
+          secretName: ldap-secret
+          defaultMode: 0444
+      - name: db
+        persistentVolumeClaim:
+          claimName: ldap-db-claim
+      - name: config
+        persistentVolumeClaim:
+          claimName: ldap-config-claim
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: ldap
+  name: setup
+data:
+  domain: tim
+  setup.sh: |
+    #!/bin/sh
+    set -xe
+
+    ADMIN_PASSWORD_SHA=$(slappasswd -s "$ADMIN_PASSWORD")
+
+    [ -f /etc/openldap/slapd.conf ] && exit 0
+
+    #configure and place provided config
+    sed -e "s~{{ADMIN_PASSWORD_SHA}}~$ADMIN_PASSWORD_SHA~g" /setup/slapd.conf > /etc/openldap/slapd.conf
+    chown root:ldap /etc/openldap/slapd.conf
+    chmod 640 /etc/openldap/slapd.conf
+
+    #create empty database, apply config to directory
+    slapadd -l /dev/null -f /etc/openldap/slapd.conf
+    mkdir /etc/openldap/slapd.d
+    slaptest -f /etc/openldap/slapd.conf -F /etc/openldap/slapd.d/
+    chown -R ldap:ldap /etc/openldap/slapd.d
+
+    #index the DB after populating it
+    slapindex
+    chown ldap:ldap /var/lib/openldap/openldap-data/*
+
+    #run server
+    /usr/sbin/slapd -u ldap -g ldap -h "ldap:/// ldaps:///"
+
+    ldapadd -x -D "cn=Manager,dc=tim" -w "$ADMIN_PASSWORD" -f /setup/base.ldif
+  slapd.conf: |
+    include         /var/lib/openldap/schema/core.schema
+    include         /var/lib/openldap/schema/cosine.schema
+    include         /var/lib/openldap/schema/inetorgperson.schema
+    include         /var/lib/openldap/schema/nis.schema
+
+    pidfile         /run/openldap/slapd.pid
+    argsfile        /run/openldap/slapd.args
+    modulepath      /usr/lib/openldap
+    moduleload      back_mdb.so
+
+    #LDAPs
+    TLSCipherSuite DEFAULT
+    TLSCertificateFile /certificates/ldap.tim.crt
+    TLSCertificateKeyFile /certificates/ldap.tim.key
+    TLSCACertificateFile /certificates/tim.crt
+    TLSCipherSuite HIGH:MEDIUM:-SSLv2:-SSLv3
+
+    database        mdb
+    maxsize         1073741824
+    suffix          "dc=tim"
+    rootdn          "cn=Manager,dc=tim"
+    rootpw          {{ADMIN_PASSWORD_SHA}}
+    directory       /var/lib/openldap/openldap-data
+    index   objectClass     eq
+
+
+    access to attrs=userPassword,givenName,sn,photo
+            by self write
+            by anonymous auth
+            by * none
+
+    access to *
+            by self read
+            by * read
+  base.ldif: |
+    dn: dc=tim
+    dc: tim
+    o: TimCorp
+    objectClass: dcObject
+    objectClass: organization
+
+    dn: cn=Manager,dc=tim
+    cn: Manager
+    description: LDAP administrator
+    objectClass: organizationalRole
+    objectClass: top
+    roleOccupant: dc=tim
+
+    dn: ou=People,dc=tim
+    ou: People
+    objectClass: top
+    objectClass: organizationalUnit
+
+    dn: ou=Group,dc=tim
+    ou: Group
+    objectClass: top
+    objectClass: organizationalUnit
+
